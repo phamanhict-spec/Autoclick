@@ -1,0 +1,4 @@
+# File cấu hình thật (chứa mật khẩu, proxy) - KHÔNG commit
+config.py
+__pycache__/
+*.pyc
