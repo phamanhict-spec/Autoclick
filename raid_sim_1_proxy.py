@@ -3,11 +3,94 @@ from selenium_driverless.types.by import By
 import time
 import random
 import re
+import base64
+import socket
+import threading
+from urllib.parse import urlsplit, unquote
 
 try:
     import config
 except ImportError:
     raise SystemExit("Chua co file config.py - hay copy config.example.py thanh config.py va dien thong tin.")
+
+
+class LocalProxyForwarder:
+    """Proxy trung gian chay tren may (127.0.0.1), tu dong gan user/pass roi chuyen tiep sang proxy that.
+
+    Chrome khong nhan user/pass trong --proxy-server, con set_single_proxy() cua selenium_driverless
+    can extension ma Chrome ban moi (137+) khong cho nap nua. Vi vay Chrome se ket noi toi proxy
+    trung gian nay (khong can mat khau), proxy trung gian them header xac thuc va gui sang proxy that.
+    """
+
+    def __init__(self, proxy_url):
+        p = urlsplit(proxy_url)
+        self.upstream = (p.hostname, p.port or 80)
+        creds = f"{unquote(p.username or '')}:{unquote(p.password or '')}"
+        self.auth_header = b"Proxy-Authorization: Basic " + base64.b64encode(creds.encode()) + b"\r\n"
+        self.server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.server.bind(("127.0.0.1", 0))
+        self.server.listen(100)
+        self.port = self.server.getsockname()[1]
+        threading.Thread(target=self._accept_loop, daemon=True).start()
+
+    @property
+    def url(self):
+        return f"http://127.0.0.1:{self.port}"
+
+    def _accept_loop(self):
+        while True:
+            client, _ = self.server.accept()
+            threading.Thread(target=self._handle, args=(client,), daemon=True).start()
+
+    def _handle(self, client):
+        upstream = None
+        try:
+            data = b""
+            while b"\r\n\r\n" not in data:
+                chunk = client.recv(65536)
+                if not chunk:
+                    return
+                data += chunk
+            head, body = data.split(b"\r\n\r\n", 1)
+            lines = [l for l in head.split(b"\r\n")
+                     if not l.lower().startswith((b"proxy-authorization:", b"proxy-connection:", b"connection:"))]
+            if not lines[0].upper().startswith(b"CONNECT"):
+                # moi request http thuong dung 1 ket noi rieng de request nao cung co header xac thuc
+                lines.append(b"Connection: close")
+            request = b"\r\n".join(lines) + b"\r\n" + self.auth_header + b"\r\n" + body
+            upstream = socket.create_connection(self.upstream, timeout=30)
+            upstream.settimeout(None)
+            upstream.sendall(request)
+            t = threading.Thread(target=self._pipe, args=(upstream, client), daemon=True)
+            t.start()
+            self._pipe(client, upstream)
+            t.join()
+        except OSError:
+            pass
+        finally:
+            for s in (client, upstream):
+                if s:
+                    try:
+                        s.close()
+                    except OSError:
+                        pass
+
+    @staticmethod
+    def _pipe(src, dst):
+        try:
+            while True:
+                chunk = src.recv(65536)
+                if not chunk:
+                    break
+                dst.sendall(chunk)
+        except OSError:
+            pass
+        finally:
+            try:
+                dst.shutdown(socket.SHUT_WR)
+            except OSError:
+                pass
 
 
 class BotTravian:
@@ -25,11 +108,14 @@ class BotTravian:
 
         option = webdriver.ChromeOptions()
         if self.proxy:
-            option.add_argument(f"--proxy-server={self.proxy}")
+            if urlsplit(self.proxy).username:
+                # proxy co user/pass -> di qua proxy trung gian (xem LocalProxyForwarder)
+                self.forwarder = LocalProxyForwarder(self.proxy)
+                option.add_argument(f"--proxy-server={self.forwarder.url}")
+            else:
+                option.add_argument(f"--proxy-server={self.proxy}")
         option.add_argument(f"--user-agent={self.agent}")
         self.driver = webdriver.Chrome(options=option)
-        if self.proxy:
-            self.driver.set_single_proxy(self.proxy)
         self.driver.normalize_window()
 
     def url(self, path=""):
