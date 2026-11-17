@@ -123,19 +123,31 @@ class BotTravian:
         return f"{self.base_url}/{path.lstrip('/')}"
 
     def human_click(self, element):
-        """Click vao 1 diem ngau nhien quanh tam element thay vi dung tam."""
+        """Click vao 1 diem ngau nhien quanh tam element thay vi dung tam.
+
+        Tu tinh toa do click (khong dung element.click() cua selenium_driverless vi ham do goi
+        np.cross voi vector 2 chieu - NumPy ban moi da bo, se bao loi ValueError).
+        """
         o = self.click_offset
-        try:
-            element.click(
-                bias_a=random.uniform(0.5 - o, 0.5 + o),
-                bias_b=random.uniform(0.5 - o, 0.5 + o),
-                spread_a=random.uniform(0.6, 1.0),
-                spread_b=random.uniform(0.6, 1.0),
-                border=0.1,
-            )
-        except TypeError:
-            # phien ban selenium_driverless cu khong ho tro tham so bias/spread
-            element.click()
+        rect = self.driver.execute_script(
+            "arguments[0].scrollIntoView({block: 'center', inline: 'center'});"
+            "const r = arguments[0].getBoundingClientRect();"
+            "return [r.left, r.top, r.width, r.height];", element)
+        time.sleep(random.uniform(0.2, 0.5))
+        left, top, width, height = rect
+        if width < 1 or height < 1:
+            # element khong hien thi (kich thuoc 0) -> click bang JS
+            self.driver.execute_script("arguments[0].click();", element)
+            return
+        x = left + width * random.uniform(0.5 - o, 0.5 + o)
+        y = top + height * random.uniform(0.5 - o, 0.5 + o)
+        self.driver.current_pointer.click(x, y)
+
+    def human_write(self, element, text):
+        """Click vao o nhap lieu (lech tam nhu human_click) roi go text."""
+        self.human_click(element)
+        time.sleep(random.uniform(0.2, 0.5))
+        element.write(text, click_on=False)
 
     def cyclesleep(self):
         t = random.randint(self.mintime, self.maxtime)
@@ -151,10 +163,10 @@ class BotTravian:
         self.driver.get(self.url(), wait_load=True)
         self.randomsleep()
         login = self.driver.find_element(By.XPATH, "//input[contains(@name,'name')]", timeout=10)
-        login.write(f"{self.user}")
+        self.human_write(login, f"{self.user}")
         time.sleep(2)
         password = self.driver.find_element(By.XPATH, """//input[@type='password']""", timeout=10)
-        password.write(f"{self.passw}")
+        self.human_write(password, f"{self.passw}")
         time.sleep(2)
         try:
             logas = self.driver.find_element(By.XPATH, """(//div[contains(.,'Login')])[13]""", timeout=10)
