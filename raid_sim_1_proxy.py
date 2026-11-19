@@ -119,7 +119,7 @@ class BotTravian:
         self.driver.normalize_window()
 
     def url(self, path=""):
-        """Tao url day du tu SERVER_URL, vd: self.url('dorf1.php')."""
+        """Tao url day du tu SERVER_URL, vd: self.url('resources')."""
         return f"{self.base_url}/{path.lstrip('/')}"
 
     def human_click(self, element):
@@ -198,35 +198,67 @@ class BotTravian:
             print('Khong click duoc all farm')
             pass
 
-    def open_sim_village(self):
-        """Mo trang mo tai nguyen (dorf1) cua lang SIM bang cach click vao ten lang."""
+    # Travian ban moi doi url: dorf1.php -> /resources, dorf2.php -> /village, build.php?id= -> /slot?id=
+    RESOURCES_PATH = 'resources'
+
+    def active_village_name(self):
+        """Ten lang dang duoc chon trong danh sach lang (rong neu khong doc duoc)."""
         try:
-            self.driver.get(self.url('dorf1.php'), wait_load=True)
+            el = self.driver.find_element(
+                By.XPATH, "//div[contains(@class,'listEntry') and contains(@class,'active')]//span[@class='name']",
+                timeout=5)
+            return self.driver.execute_script('return arguments[0].textContent.trim();', el)
+        except Exception:
+            return ''
+
+    def open_sim_village(self):
+        """Mo trang mo tai nguyen (/resources) cua lang SIM bang cach click vao ten lang."""
+        try:
+            self.driver.get(self.url(self.RESOURCES_PATH), wait_load=True)
             self.randomsleep(1)
-            village = self.driver.find_element(
-                By.XPATH, f"""//*[normalize-space(text())='{self.sim_village}']""", timeout=10)
-            self.human_click(village)
-            self.randomsleep(1)
-            dorf = self.driver.find_element(By.XPATH, """//a[@href='/dorf1.php']""", timeout=10)
+            if self.active_village_name() != self.sim_village:
+                village = self.driver.find_element(
+                    By.XPATH,
+                    f"""//div[contains(@class,'villageList')]//span[@class='name'][normalize-space(text())='{self.sim_village}']""",
+                    timeout=10)
+                self.human_click(village)
+                self.randomsleep(1)
+            # nut "Resources" tren thanh dieu huong (href='/resources'; ban cu la '/dorf1.php')
+            dorf = self.driver.find_element(
+                By.XPATH, """//div[@id='navigation']//a[contains(@class,'resourceView') or @href='/dorf1.php']""",
+                timeout=10)
             self.human_click(dorf)
             self.randomsleep(1)
-        except:
-            print(f'Khong mo duoc lang {self.sim_village}')
+            current = self.active_village_name()
+            if current != self.sim_village:
+                print(f'Canh bao: lang dang chon la "{current}", khong phai "{self.sim_village}"')
+                return False
+            return True
+        except Exception as e:
+            print(f'Khong mo duoc lang {self.sim_village}: {type(e).__name__}: {e}')
+            return False
+
+    @staticmethod
+    def field_xpath(i):
+        """XPath o ruong thu i (ho tro ca url moi /slot?id= va url cu /build.php?id=)."""
+        return f"""//a[@href='/slot?id={i}' or @href='/build.php?id={i}']"""
 
     def sim(self):
-        self.open_sim_village()
+        if not self.open_sim_village():
+            return
         upgrade = []
         for i in range(1, 19):
             try:
-                button = self.driver.find_element(By.XPATH, f"""//a[@href='/build.php?id={i}']""", timeout=10)
+                button = self.driver.find_element(By.XPATH, self.field_xpath(i), timeout=10)
                 button_class = self.driver.execute_script('return arguments[0].className;', button)
-                button_class = str(button_class).strip()
+                classes = str(button_class).split()
 
-                #print(button_class)
+                #print(classes)
 
-                if button_class[:4] == 'good':
-                    lver = re.findall(r'level(\d+)', button_class.replace(' ', ''))
-                    level = int(lver[-1]) if lver else 0
+                # 'good' = du tai nguyen de nang cap; 'notNow' = chua nang duoc (thieu tai nguyen / hang doi day)
+                if 'good' in classes:
+                    lver = [int(m.group(1)) for c in classes for m in [re.fullmatch(r'level(\d+)', c)] if m]
+                    level = lver[-1] if lver else 0
                     upgrade.append((level, i))
             except:
                 pass
@@ -236,10 +268,11 @@ class BotTravian:
         #print(upgrade)
         for _, bton in upgrade:
             try:
-                button = self.driver.find_element(By.XPATH, f"""//a[@href='/build.php?id={bton}']""", timeout=10)
+                button = self.driver.find_element(By.XPATH, self.field_xpath(bton), timeout=10)
                 self.human_click(button)
                 time.sleep(2)
-                butoonup = self.driver.find_element(By.XPATH, """//button[@class='textButtonV1 green build']""", timeout=3)
+                butoonup = self.driver.find_element(
+                    By.XPATH, """//button[contains(@class,'green') and contains(@class,'build')]""", timeout=3)
                 self.human_click(butoonup)
                 time.sleep(2)
             except:
@@ -250,12 +283,12 @@ class BotTravian:
                 self.open_sim_village()
             except:
                 pass
-        print('Da sim lang')
+        print(f'Da sim lang ({len(upgrade)} o duoc nang cap)')
 
     def trangchu(self):
         if self.dangnhap:
             self.driver.refresh()
-            self.driver.get(self.url('dorf1.php'), wait_load=True)
+            self.driver.get(self.url(self.RESOURCES_PATH), wait_load=True)
             self.randomsleep()
             return True
         else:
